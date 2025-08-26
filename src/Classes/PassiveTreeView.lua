@@ -285,6 +285,11 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 				build.buildFlag = true
 			elseif hoverNode.path then
 				-- Node is unallocated and can be allocated, so allocate it
+				-- Check if trying to allocate a keystone while a weapon set is selected (which is not allowed)
+				if hoverNode.type == "Keystone" and spec.allocMode > 0 then
+					-- Block keystone allocation when weapon set is selected
+					return
+				end
 				-- attribute switching, unallocated to allocated
 				if hoverNode.isAttribute and not hotkeyPressed then
 					build.treeTab:ModifyAttributePopup(hoverNode)
