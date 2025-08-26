@@ -264,10 +264,70 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 	end
 	
 	local hotkeyPressed = IsKeyDown("1") or IsKeyDown("I") or IsKeyDown("2") or IsKeyDown("S") or IsKeyDown("3") or IsKeyDown("D")
+	-- Helper function to check if path contains any weapon set nodes OR if node is directly connected to weapon set nodes
+	local function isConnectedToWeaponSetNodes(node)
+		-- First check the path for weapon set nodes
+		if node.path and #node.path > 1 then
+			-- Check all nodes in the path (except the target node itself)
+			-- Skip the first element since it's the target node itself
+			for i = 2, #node.path do
+				local pathNode = node.path[i]
+				if pathNode.alloc and pathNode.allocMode > 0 then
+					return true
+				end
+			end
+		end
+
+		-- CRITICAL FIX: Also check direct connections when path is short or empty
+		-- This handles cases where global nodes are directly adjacent to weapon set nodes
+		if node.linked then
+			for _, linkedNode in ipairs(node.linked) do
+				if linkedNode.alloc and linkedNode.allocMode and linkedNode.allocMode > 0 then
+					return true
+				end
+			end
+		end
+
+		return false
+	end
+
+	-- Helper function to determine if global node allocation should be blocked
+	local function shouldBlockGlobalNodeAllocation(node)
+		local isGlobalNode = node.type == "Keystone" or node.type == "Socket" or node.containJewelSocket
+
+		if not isGlobalNode or node.alloc or not node.path then
+			return false
+		end
+
+		local weaponSetMode = spec.allocMode > 0
+		local connectedToWeaponSetNodes = isConnectedToWeaponSetNodes(node)
+
+		-- Only allow allocation from main tree AND node must not be connected to weapon set nodes
+		local shouldBlock = weaponSetMode or connectedToWeaponSetNodes
+
+		return shouldBlock
+	end
+
+	-- Helper function to determine if global node deallocation should be blocked
+	local function shouldBlockGlobalNodeDeallocation(node)
+		local isGlobalNode = node.type == "Keystone" or node.type == "Socket" or node.containJewelSocket
+
+		if not isGlobalNode or not node.alloc then
+			return false
+		end
+
+		-- Main-tree global nodes can only be deallocated from main tree
+		-- Legacy weapon-set global nodes can be deallocated from any mode
+		local shouldBlock = node.allocMode == 0 and spec.allocMode > 0
+
+		return shouldBlock
+	end
+
 	if treeClick == "LEFT" then
 		if hoverNode then
 			-- User left-clicked on a node
-			if hoverNode.alloc then
+			if hoverNode.alloc and not shouldBlockGlobalNodeDeallocation(hoverNode) then
+				-- Handle deallocation of allocated nodes
 				if hoverNode.isAttribute then
 					-- change to other attribute without needing to deallocate
 					if hotkeyPressed then
@@ -283,9 +343,8 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 				end
 				spec:AddUndoState()
 				build.buildFlag = true
-			elseif hoverNode.path then
-				-- Node is unallocated and can be allocated, so allocate it
-				-- attribute switching, unallocated to allocated
+			elseif hoverNode.path and not shouldBlockGlobalNodeAllocation(hoverNode) then
+				-- Handle allocation of unallocated nodes
 				if hoverNode.isAttribute and not hotkeyPressed then
 					build.treeTab:ModifyAttributePopup(hoverNode)
 				else
@@ -301,6 +360,7 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 			end
 		end
 	elseif treeClick == "RIGHT" then
+		-- User right-clicked on a node
 		if hoverNode then
 			if hoverNode.alloc and (hoverNode.type == "Socket" or hoverNode.containJewelSocket) then
 				local slot = build.itemsTab.sockets[hoverNode.id]
@@ -311,25 +371,28 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 					build.viewMode = "ITEMS"
 				end
 			else
-				-- a way for us to bypass the popup when allocating attribute nodes, last used hotkey + RMB
-				-- RMB + non attribute node logic
-				-- RMB hot-swap logic
-				if hotkeyPressed then
-					processAttributeHotkeys(hoverNode.isAttribute)
-				elseif hoverNode.isAttribute then
-					-- If the attribute node is already set to str, int, or dex create a toggle effect between attrs
-					if hoverNode.dn == "Intelligence" then
-						spec.attributeIndex = 1
-					elseif hoverNode.dn == "Dexterity" then
-						spec.attributeIndex = 3
-					elseif hoverNode.dn == "Strength" then
-						spec.attributeIndex = 2
+				-- Apply same global node restrictions as left-click for consistency
+				if not shouldBlockGlobalNodeAllocation(hoverNode) then
+					-- a way for us to bypass the popup when allocating attribute nodes, last used hotkey + RMB
+					-- RMB + non attribute node logic
+					-- RMB hot-swap logic
+					if hotkeyPressed then
+						processAttributeHotkeys(hoverNode.isAttribute)
+					elseif hoverNode.isAttribute then
+						-- If the attribute node is already set to str, int, or dex create a toggle effect between attrs
+						if hoverNode.dn == "Intelligence" then
+							spec.attributeIndex = 1
+						elseif hoverNode.dn == "Dexterity" then
+							spec.attributeIndex = 3
+						elseif hoverNode.dn == "Strength" then
+							spec.attributeIndex = 2
+						end
+						spec:SwitchAttributeNode(hoverNode.id, spec.attributeIndex or 1)
 					end
-					spec:SwitchAttributeNode(hoverNode.id, spec.attributeIndex or 1)
+					spec:AllocNode(hoverNode, self.tracePath and hoverNode == self.tracePath[#self.tracePath] and self.tracePath)
+					spec:AddUndoState()
+					build.buildFlag = true
 				end
-				spec:AllocNode(hoverNode, self.tracePath and hoverNode == self.tracePath[#self.tracePath] and self.tracePath)
-				spec:AddUndoState()
-				build.buildFlag = true
 			end
 		end
 	end
@@ -834,7 +897,7 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 			-- Draw tooltip
 			SetDrawLayer(nil, 100)
 			local size = m_floor(node.size * scale)
-			if self.tooltip:CheckForUpdate(node, self.showStatDifferences, self.tracePath, launch.devModeAlt, build.outputRevision) then
+			if self.tooltip:CheckForUpdate(node, self.showStatDifferences, self.tracePath, launch.devModeAlt, build.outputRevision, build.spec.allocMode) then
 				self:AddNodeTooltip(self.tooltip, node, build, incSmallPassiveSkillEffect)
 			end
 			self.tooltip.center = true
@@ -1138,6 +1201,9 @@ function PassiveTreeViewClass:AddNodeTooltip(tooltip, node, build, incSmallPassi
 		if socket ~= nil and socket:IsEnabled() then
 			tooltip:AddLine(14, colorCodes.TIP.."Tip: Right click this socket to go to the items page and choose the jewel for this socket.")
 		end
+
+		self:AddGlobalNodeWarningsToTooltip(tooltip, node, build)
+
 		tooltip:AddLine(14, colorCodes.TIP.."Tip: Hold Shift or Ctrl to hide this tooltip.")
 		return
 	end
@@ -1397,10 +1463,71 @@ function PassiveTreeViewClass:AddNodeTooltip(tooltip, node, build, incSmallPassi
 		tooltip:AddLine(14, "^7"..#node.depends .. " points gained from unallocating these nodes")
 		tooltip:AddLine(14, colorCodes.TIP)
 	end
+
+	self:AddGlobalNodeWarningsToTooltip(tooltip, node, build)
+
 	if node.type == "Socket" then
 		tooltip:AddLine(14, colorCodes.TIP.."Tip: Hold Shift or Ctrl to hide this tooltip.")
 	else
 		tooltip:AddLine(14, colorCodes.TIP.."Tip: Hold Ctrl to hide this tooltip.")
+	end
+end
+
+-- Helper function to add warnings in the tooltip for global nodes (keystones/jewel sockets)
+function PassiveTreeViewClass:AddGlobalNodeWarningsToTooltip(tooltip, node, build)
+	local isGlobalNode = node.type == "Keystone" or node.type == "Socket" or node.containJewelSocket
+
+	if not isGlobalNode then
+		return -- No warning needed for non-global nodes
+	end
+
+	local nodeTypeText = node.type == "Keystone" and "keystones" or "jewel sockets"
+	local warningText = ""
+	local tipText = ""
+
+	-- Helper function to check if node is connected to weapon set nodes (same logic as main function)
+	local function isConnectedToWeaponSetNodes(node)
+		-- Check the path for weapon set nodes
+		if node.path and #node.path > 1 then
+			for i = 2, #node.path do
+				local pathNode = node.path[i]
+				if pathNode.alloc and pathNode.allocMode > 0 then
+					return true
+				end
+			end
+		end
+
+		-- Also check direct connections when path is short or empty
+		if node.linked then
+			for _, linkedNode in ipairs(node.linked) do
+				if linkedNode.alloc and linkedNode.allocMode and linkedNode.allocMode > 0 then
+					return true
+				end
+			end
+		end
+
+		return false
+	end
+
+	if not node.alloc and node.path then
+		-- Unallocated global node - check allocation conditions
+		if build.spec.allocMode > 0 then
+			warningText = "Cannot allocate " .. nodeTypeText .. " while weapon set " .. build.spec.allocMode .. " is selected"
+			tipText = "Tip: Switch to main tree (Alt+scroll) to allocate " .. nodeTypeText
+		elseif isConnectedToWeaponSetNodes(node) then
+			warningText = "Cannot allocate " .. nodeTypeText .. " - connected to weapon set nodes"
+			tipText = "Tip: Deallocate weapon set nodes in the connection path to allow allocation"
+		end
+	elseif node.alloc and node.allocMode == 0 and build.spec.allocMode > 0 then
+		-- Allocated main-tree global node viewed from weapon set
+		warningText = "Cannot deallocate global " .. nodeTypeText .. " from weapon set " .. build.spec.allocMode
+		tipText = "Tip: Switch to main tree (Alt+scroll) to deallocate " .. nodeTypeText
+	end
+
+	if warningText ~= "" then
+		tooltip:AddSeparator(14)
+		tooltip:AddLine(14, colorCodes.WARNING .. warningText)
+		tooltip:AddLine(14, colorCodes.TIP .. tipText)
 	end
 end
 
