@@ -1402,6 +1402,14 @@ function PassiveTreeViewClass:AddNodeTooltip(tooltip, node, build, incSmallPassi
 		tooltip:AddLine(14, "^7"..#node.depends .. " points gained from unallocating these nodes")
 		tooltip:AddLine(14, colorCodes.TIP)
 	end
+
+	-- Warning for keystones when weapon set is selected
+	if node.type == "Keystone" and not node.alloc and node.path and build.spec.allocMode > 0 then
+		tooltip:AddSeparator(14)
+		tooltip:AddLine(14, colorCodes.WARNING.."Cannot allocate keystones while weapon set " .. build.spec.allocMode .. " is selected")
+		tooltip:AddLine(14, colorCodes.TIP.."Tip: Switch to main tree (Alt+scroll) to allocate keystones")
+	end
+
 	if node.type == "Socket" then
 		tooltip:AddLine(14, colorCodes.TIP.."Tip: Hold Shift or Ctrl to hide this tooltip.")
 	else
