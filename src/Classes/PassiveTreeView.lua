@@ -267,7 +267,13 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 	if treeClick == "LEFT" then
 		if hoverNode then
 			-- User left-clicked on a node
+			local isGlobalNode = hoverNode.type == "Keystone" or hoverNode.type == "Socket" or hoverNode.containJewelSocket
 			if hoverNode.alloc then
+				if isGlobalNode and hoverNode.allocMode == 0 and spec.allocMode > 0 then
+					-- Block main-tree global node deallocation when weapon set is selected
+					-- Note: if the global node was allocated on a weapon set (which is incorrect but can happen due to legacy/corrupted builds), we do allow deallocation.
+					-- (As the calculation will correctly account for the weapon set allocation, so no point of blocking it)
+				end
 				if hoverNode.isAttribute then
 					-- change to other attribute without needing to deallocate
 					if hotkeyPressed then
@@ -284,10 +290,9 @@ function PassiveTreeViewClass:Draw(build, viewPort, inputEvents)
 				spec:AddUndoState()
 				build.buildFlag = true
 			elseif hoverNode.path then
-				-- Node is unallocated and can be allocated, so allocate it
-				-- Check if trying to allocate a keystone while a weapon set is selected (which is not allowed)
-				if hoverNode.type == "Keystone" and spec.allocMode > 0 then
-					-- Block keystone allocation when weapon set is selected
+				-- Node is unallocated and can be *potentially* allocated
+				if isGlobalNode and spec.allocMode > 0 then
+					-- Block global node allocation when weapon set is selected
 					return
 				end
 				-- attribute switching, unallocated to allocated
@@ -1143,6 +1148,9 @@ function PassiveTreeViewClass:AddNodeTooltip(tooltip, node, build, incSmallPassi
 		if socket ~= nil and socket:IsEnabled() then
 			tooltip:AddLine(14, colorCodes.TIP.."Tip: Right click this socket to go to the items page and choose the jewel for this socket.")
 		end
+
+		self:AddGlobalNodeWarningsToTooltip(tooltip, node, build)
+
 		tooltip:AddLine(14, colorCodes.TIP.."Tip: Hold Shift or Ctrl to hide this tooltip.")
 		return
 	end
@@ -1403,17 +1411,48 @@ function PassiveTreeViewClass:AddNodeTooltip(tooltip, node, build, incSmallPassi
 		tooltip:AddLine(14, colorCodes.TIP)
 	end
 
-	-- Warning for keystones when weapon set is selected
-	if node.type == "Keystone" and not node.alloc and node.path and build.spec.allocMode > 0 then
-		tooltip:AddSeparator(14)
-		tooltip:AddLine(14, colorCodes.WARNING.."Cannot allocate keystones while weapon set " .. build.spec.allocMode .. " is selected")
-		tooltip:AddLine(14, colorCodes.TIP.."Tip: Switch to main tree (Alt+scroll) to allocate keystones")
-	end
+	self:AddGlobalNodeWarningsToTooltip(tooltip, node, build)
 
 	if node.type == "Socket" then
 		tooltip:AddLine(14, colorCodes.TIP.."Tip: Hold Shift or Ctrl to hide this tooltip.")
 	else
 		tooltip:AddLine(14, colorCodes.TIP.."Tip: Hold Ctrl to hide this tooltip.")
+	end
+end
+
+-- Helper function to add warnings in the tooltip for global nodes (keystones/jewel sockets)
+function PassiveTreeViewClass:AddGlobalNodeWarningsToTooltip(tooltip, node, build)
+	local isGlobalNode = node.type == "Keystone" or node.type == "Socket" or node.containJewelSocket
+
+	if not isGlobalNode or build.spec.allocMode == 0 then
+		return -- No warning needed
+	end
+
+	local nodeTypeText = node.type == "Keystone" and "keystones" or "jewel sockets"
+	local singleNodeText = node.type == "Keystone" and "keystone" or "jewel socket"
+	local warningText = ""
+	local tipText = ""
+
+	if not node.alloc and node.path then
+		-- Warning for allocation of global nodes on wrong weapon set
+		warningText = "Cannot allocate " .. nodeTypeText .. " while weapon set " .. build.spec.allocMode .. " is selected"
+		tipText = "Tip: Switch to main tree (Alt+scroll) to allocate " .. nodeTypeText
+	elseif node.alloc and node.allocMode ~= build.spec.allocMode then
+		-- Warning for deallocation of global nodes on wrong weapon set
+		if node.allocMode == 0 then
+			-- Main-tree global nodes cannot be deallocated from weapon sets
+			warningText = "Cannot deallocate global " .. nodeTypeText .. " from weapon set " .. build.spec.allocMode
+			tipText = "Tip: Switch to main tree (Alt+scroll) to deallocate " .. nodeTypeText
+		else
+			-- Legacy global nodes can be deallocated from anywhere - no warning needed
+			return
+		end
+	end
+
+	if warningText ~= "" then
+		tooltip:AddSeparator(14)
+		tooltip:AddLine(14, colorCodes.WARNING .. warningText)
+		tooltip:AddLine(14, colorCodes.TIP .. tipText)
 	end
 end
 
